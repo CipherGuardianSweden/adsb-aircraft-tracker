@@ -25,6 +25,12 @@ CONF_CLOSE_AIRCRAFT_ENABLED = "close_aircraft_enabled"
 CONF_CLOSE_AIRCRAFT_DISTANCE = "close_aircraft_distance"
 CONF_CLOSE_AIRCRAFT_ALTITUDE = "close_aircraft_altitude"
 CONF_EMERGENCY_NOTIFICATIONS = "emergency_notifications"
+# Data source
+CONF_DATA_SOURCE = "data_source"
+CONF_ADSB_FILE_PATH = "adsb_file_path"
+DATA_SOURCE_HTTP = "http"
+DATA_SOURCE_LOCAL_FILE = "local_file"
+DEFAULT_ADSB_FILE_PATH = "/config/data/aircraft.json"
 
 # Default values
 DEFAULT_ADSB_PORT = 8085
