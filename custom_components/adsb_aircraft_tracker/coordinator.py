@@ -18,7 +18,12 @@ from .const import (
     DOMAIN,
     CONF_ADSB_HOST,
     CONF_ADSB_PORT,
+    CONF_ADSB_FILE_PATH,
+    CONF_DATA_SOURCE,
     CONF_DISTANCE_LIMIT,
+    DATA_SOURCE_HTTP,
+    DATA_SOURCE_LOCAL_FILE,
+    DEFAULT_ADSB_FILE_PATH,
     DEFAULT_ADSB_PORT,
     DEFAULT_DISTANCE_LIMIT,
     MILITARY_DB_URL,
@@ -38,14 +43,35 @@ class ADSBDataUpdateCoordinator(DataUpdateCoordinator):
     ) -> None:
         """Initialize coordinator."""
         self.config_entry = config_entry
+
         # Options (UI-editable) override the original setup data
         config = {**config_entry.data, **config_entry.options}
-        self.adsb_host = config[CONF_ADSB_HOST]
-        self.adsb_port = config.get(CONF_ADSB_PORT, DEFAULT_ADSB_PORT)
-        self.distance_limit = config.get(CONF_DISTANCE_LIMIT, DEFAULT_DISTANCE_LIMIT)
 
-        # Build ADSB URL
-        self.adsb_url = f"http://{self.adsb_host}:{self.adsb_port}/data/aircraft.json"
+        # Data source:
+        # - HTTP is the legacy/default source
+        # - local_file reads directly from the Home Assistant filesystem
+        self.data_source = config.get(CONF_DATA_SOURCE, DATA_SOURCE_HTTP)
+
+        self.adsb_host = config.get(CONF_ADSB_HOST, "")
+        self.adsb_port = config.get(CONF_ADSB_PORT, DEFAULT_ADSB_PORT)
+        self.adsb_file_path = config.get(
+            CONF_ADSB_FILE_PATH,
+            DEFAULT_ADSB_FILE_PATH,
+        )
+        self.distance_limit = config.get(
+            CONF_DISTANCE_LIMIT,
+            DEFAULT_DISTANCE_LIMIT,
+        )
+
+        # Build ADSB URL only when using HTTP.
+        # Local file mode does not need a host, port or URL.
+        if self.data_source == DATA_SOURCE_HTTP:
+            self.adsb_url = (
+                f"http://{self.adsb_host}:{self.adsb_port}"
+                "/data/aircraft.json"
+            )
+        else:
+            self.adsb_url = None
 
         # Load aircraft types database (will be loaded async after init)
         self.aircraft_types_db = {}
@@ -62,100 +88,190 @@ class ADSBDataUpdateCoordinator(DataUpdateCoordinator):
             name=DOMAIN,
             update_interval=update_interval,
         )
-        
+
         # Schedule async loading of aircraft types database
         self.hass.async_create_task(self._async_load_aircraft_types_db())
 
         # Initial military database load (refreshed daily by a timer in __init__)
         self.hass.async_create_task(self._async_load_military_database())
 
+    @property
+    def source_name(self) -> str:
+        """Return a human-readable description of the ADSB data source."""
+        if self.data_source == DATA_SOURCE_LOCAL_FILE:
+            return f"Local file: {self.adsb_file_path}"
+
+        return f"{self.adsb_host}:{self.adsb_port}"
+
     async def _async_load_aircraft_types_db(self) -> None:
         """Load aircraft types database from tar1090-db asynchronously."""
         try:
             import aiofiles
-            db_path = os.path.join(os.path.dirname(__file__), "icao_aircraft_types.json")
+
+            db_path = os.path.join(
+                os.path.dirname(__file__),
+                "icao_aircraft_types.json",
+            )
+
             if os.path.exists(db_path):
-                async with aiofiles.open(db_path, "r", encoding="utf-8") as f:
+                async with aiofiles.open(
+                    db_path,
+                    "r",
+                    encoding="utf-8",
+                ) as f:
                     content = await f.read()
                     self.aircraft_types_db = json.loads(content)
-                    _LOGGER.info("Loaded %d aircraft types from tar1090-db", len(self.aircraft_types_db))
+                    _LOGGER.info(
+                        "Loaded %d aircraft types from tar1090-db",
+                        len(self.aircraft_types_db),
+                    )
             else:
-                _LOGGER.warning("Aircraft types database not found at %s", db_path)
+                _LOGGER.warning(
+                    "Aircraft types database not found at %s",
+                    db_path,
+                )
                 self.aircraft_types_db = {}
+
         except ImportError:
             # Fallback to sync loading if aiofiles not available
             try:
-                db_path = os.path.join(os.path.dirname(__file__), "icao_aircraft_types.json")
+                db_path = os.path.join(
+                    os.path.dirname(__file__),
+                    "icao_aircraft_types.json",
+                )
+
                 if os.path.exists(db_path):
                     with open(db_path, "r", encoding="utf-8") as f:
                         self.aircraft_types_db = json.load(f)
-                        _LOGGER.info("Loaded %d aircraft types from tar1090-db (sync fallback)", len(self.aircraft_types_db))
+
+                    _LOGGER.info(
+                        "Loaded %d aircraft types from tar1090-db "
+                        "(sync fallback)",
+                        len(self.aircraft_types_db),
+                    )
                 else:
-                    _LOGGER.warning("Aircraft types database not found at %s", db_path)
+                    _LOGGER.warning(
+                        "Aircraft types database not found at %s",
+                        db_path,
+                    )
                     self.aircraft_types_db = {}
+
             except Exception as err:
-                _LOGGER.error("Failed to load aircraft types database (sync fallback): %s", err)
+                _LOGGER.error(
+                    "Failed to load aircraft types database "
+                    "(sync fallback): %s",
+                    err,
+                )
                 self.aircraft_types_db = {}
+
         except Exception as err:
-            _LOGGER.error("Failed to load aircraft types database: %s", err)
+            _LOGGER.error(
+                "Failed to load aircraft types database: %s",
+                err,
+            )
             self.aircraft_types_db = {}
 
-    def get_aircraft_type_info(self, aircraft_type: str | None) -> dict[str, Any]:
+    def get_aircraft_type_info(
+        self,
+        aircraft_type: str | None,
+    ) -> dict[str, Any]:
         """Get detailed aircraft type information from tar1090-db."""
         if not aircraft_type or not self.aircraft_types_db:
-            return {"description": "Unknown aircraft", "category": "Unknown", "weight_class": "Unknown"}
-        
+            return {
+                "description": "Unknown aircraft",
+                "category": "Unknown",
+                "weight_class": "Unknown",
+            }
+
         # Look up in aircraft types database
-        type_info = self.aircraft_types_db.get(aircraft_type.upper(), {})
-        
-        # Parse description field (format: engine_count + engine_type + aircraft_category)
+        type_info = self.aircraft_types_db.get(
+            aircraft_type.upper(),
+            {},
+        )
+
+        # Parse description field
         desc = type_info.get("desc", "")
-        wtc = type_info.get("wtc", "L")  # Weight category: L=Light, M=Medium, H=Heavy
-        
+        wtc = type_info.get("wtc", "L")
+
         # Parse engine info from description
         engine_count = "Unknown"
         engine_type = "Unknown"
         category = "Unknown"
-        
+
         if desc:
-            # First character is usually engine count (1-8) or special codes
+            # First character is usually engine count (1-8)
+            # or special codes
             if desc[0].isdigit():
                 engine_count = desc[0]
             elif desc[0] in "ABCGHILRS":
-                # Special engine configurations
-                engine_count = {"A": "Amphibian", "B": "Balloon", "G": "Gyrocopter", 
-                              "H": "Helicopter", "L": "Glider", "R": "Rotorcraft", 
-                              "S": "Seaplane"}.get(desc[0], "Special")
-            
+                engine_count = {
+                    "A": "Amphibian",
+                    "B": "Balloon",
+                    "G": "Gyrocopter",
+                    "H": "Helicopter",
+                    "L": "Glider",
+                    "R": "Rotorcraft",
+                    "S": "Seaplane",
+                }.get(desc[0], "Special")
+
             # Second character is engine type
             if len(desc) > 1:
-                engine_type = {"P": "Piston", "T": "Turboprop", "J": "Jet", 
-                             "E": "Electric", "R": "Rocket"}.get(desc[1], "Unknown")
-            
+                engine_type = {
+                    "P": "Piston",
+                    "T": "Turboprop",
+                    "J": "Jet",
+                    "E": "Electric",
+                    "R": "Rocket",
+                }.get(desc[1], "Unknown")
+
             # Third character is aircraft category
             if len(desc) > 2:
-                category = {"P": "Landplane", "S": "Seaplane", "A": "Amphibian",
-                          "H": "Helicopter", "G": "Gyrocopter", "T": "Tiltrotor"}.get(desc[2], "Aircraft")
-        
+                category = {
+                    "P": "Landplane",
+                    "S": "Seaplane",
+                    "A": "Amphibian",
+                    "H": "Helicopter",
+                    "G": "Gyrocopter",
+                    "T": "Tiltrotor",
+                }.get(desc[2], "Aircraft")
+
         # Create friendly description
         if aircraft_type.upper() in self.aircraft_types_db:
-            friendly_desc = self._create_friendly_description(aircraft_type.upper(), engine_count, engine_type, category)
+            friendly_desc = self._create_friendly_description(
+                aircraft_type.upper(),
+                engine_count,
+                engine_type,
+                category,
+            )
         else:
-            friendly_desc = f"{aircraft_type} ({category})" if category != "Unknown" else aircraft_type
-        
+            friendly_desc = (
+                f"{aircraft_type} ({category})"
+                if category != "Unknown"
+                else aircraft_type
+            )
+
         return {
             "description": friendly_desc,
             "category": category,
-            "weight_class": {"L": "Light", "M": "Medium", "H": "Heavy"}.get(wtc, "Unknown"),
+            "weight_class": {
+                "L": "Light",
+                "M": "Medium",
+                "H": "Heavy",
+            }.get(wtc, "Unknown"),
             "engine_count": engine_count,
             "engine_type": engine_type,
             "raw_desc": desc,
-            "raw_wtc": wtc
+            "raw_wtc": wtc,
         }
 
-    def _create_friendly_description(self, aircraft_type: str, engine_count: str, engine_type: str, category: str) -> str:
+    def _create_friendly_description(
+        self,
+        aircraft_type: str,
+        engine_count: str,
+        engine_type: str,
+        category: str,
+    ) -> str:
         """Create a friendly description for known aircraft types."""
-        # Known aircraft mappings for better descriptions
         aircraft_names = {
             "A320": "Airbus A320",
             "A321": "Airbus A321",
@@ -195,80 +311,147 @@ class ADSBDataUpdateCoordinator(DataUpdateCoordinator):
             "BE35": "Beechcraft Bonanza",
             "UH60": "Sikorsky UH-60 Black Hawk",
             "CH47": "Boeing CH-47 Chinook",
-            "AH64": "Boeing AH-64 Apache"
+            "AH64": "Boeing AH-64 Apache",
         }
-        
-        friendly_name = aircraft_names.get(aircraft_type, aircraft_type)
-        
+
+        friendly_name = aircraft_names.get(
+            aircraft_type,
+            aircraft_type,
+        )
+
         # Add engine information if available and not helicopter
-        if category != "Helicopter" and engine_count.isdigit() and engine_type != "Unknown":
+        if (
+            category != "Helicopter"
+            and engine_count.isdigit()
+            and engine_type != "Unknown"
+        ):
             if int(engine_count) > 1:
-                engine_desc = f"{engine_count}-engine {engine_type.lower()}"
+                engine_desc = (
+                    f"{engine_count}-engine {engine_type.lower()}"
+                )
             else:
-                engine_desc = f"Single-engine {engine_type.lower()}"
+                engine_desc = (
+                    f"Single-engine {engine_type.lower()}"
+                )
+
             return f"{friendly_name} ({engine_desc})"
-        
+
         return friendly_name
 
     def get_distance_unit(self) -> str:
         """Get the appropriate distance unit based on Home Assistant unit system."""
         return "km" if self.hass.config.units.length == "km" else "mi"
-    
+
     def convert_distance(self, miles: float) -> float:
         """Convert miles to appropriate unit based on Home Assistant unit system."""
         if self.hass.config.units.length == "km":
-            return miles * 1.60934  # Convert to kilometers
+            return miles * 1.60934
+
         return miles
-    
+
     def format_distance(self, miles: float | None) -> str:
         """Format distance with appropriate unit."""
         if miles is None or miles == 0:
             return "Unknown"
+
         if self.hass.config.units.length == "km":
             km = miles * 1.60934
             return f"{km:.1f} km"
+
         return f"{miles:.1f} mi"
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch aircraft data from ADSB source."""
-        try:
-            session = async_get_clientsession(self.hass)
+        if self.data_source == DATA_SOURCE_LOCAL_FILE:
+            try:
+                data = await self.hass.async_add_executor_job(
+                    _read_aircraft_file,
+                    self.adsb_file_path,
+                )
+            except FileNotFoundError as err:
+                raise UpdateFailed(
+                    f"ADSB data file not found: {self.adsb_file_path}"
+                ) from err
+            except json.JSONDecodeError as err:
+                raise UpdateFailed(
+                    f"Invalid JSON in ADSB data file "
+                    f"{self.adsb_file_path}: {err}"
+                ) from err
+            except OSError as err:
+                raise UpdateFailed(
+                    f"Error reading ADSB data file "
+                    f"{self.adsb_file_path}: {err}"
+                ) from err
 
-            async with asyncio.timeout(10):
-                async with session.get(self.adsb_url) as response:
-                    if response.status != 200:
-                        raise UpdateFailed(
-                            f"Error fetching ADSB data: HTTP {response.status}"
-                        )
-                    data = await response.json()
+        else:
+            try:
+                session = async_get_clientsession(self.hass)
 
-        except UpdateFailed:
-            raise
-        except asyncio.TimeoutError as err:
-            raise UpdateFailed(f"Timeout fetching ADSB data from {self.adsb_url}") from err
-        except aiohttp.ClientError as err:
-            raise UpdateFailed(f"Error fetching ADSB data: {err}") from err
-        except (json.JSONDecodeError, ValueError) as err:
-            raise UpdateFailed(f"Invalid JSON from ADSB source: {err}") from err
+                async with asyncio.timeout(10):
+                    async with session.get(self.adsb_url) as response:
+                        if response.status != 200:
+                            raise UpdateFailed(
+                                "Error fetching ADSB data: "
+                                f"HTTP {response.status}"
+                            )
+
+                        data = await response.json()
+
+            except UpdateFailed:
+                raise
+            except asyncio.TimeoutError as err:
+                raise UpdateFailed(
+                    "Timeout fetching ADSB data from "
+                    f"{self.adsb_url}"
+                ) from err
+            except aiohttp.ClientError as err:
+                raise UpdateFailed(
+                    f"Error fetching ADSB data: {err}"
+                ) from err
+            except (json.JSONDecodeError, ValueError) as err:
+                raise UpdateFailed(
+                    f"Invalid JSON from ADSB source: {err}"
+                ) from err
 
         # Validate data structure
         if "aircraft" not in data:
-            raise UpdateFailed("Invalid ADSB data: missing aircraft array")
+            raise UpdateFailed(
+                "Invalid ADSB data: missing aircraft array"
+            )
+
+        if not isinstance(data["aircraft"], list):
+            raise UpdateFailed(
+                "Invalid ADSB data: aircraft is not a list"
+            )
 
         # Filter aircraft by distance if limit is set
         aircraft = data["aircraft"]
+
         if self.distance_limit > 0:
             aircraft = [
-                plane for plane in aircraft
-                if plane.get("r_dst") is not None and plane["r_dst"] <= self.distance_limit
+                plane
+                for plane in aircraft
+                if plane.get("r_dst") is not None
+                and plane["r_dst"] <= self.distance_limit
             ]
 
-        # Process and enrich aircraft data. Include all aircraft, even without
-        # position data (important for military detection).
-        processed_aircraft = [self._process_aircraft(plane) for plane in aircraft]
+        # Process and enrich aircraft data.
+        # Include all aircraft, even without position data
+        # (important for military detection).
+        processed_aircraft = [
+            self._process_aircraft(plane)
+            for plane in aircraft
+        ]
 
-        # Sort by distance (closest first), putting aircraft without distance at end
-        processed_aircraft.sort(key=lambda x: x.get("distance_mi") if x.get("distance_mi") is not None else 999)
+        # Sort by distance (closest first), putting aircraft without
+        # distance at end.
+        processed_aircraft.sort(
+            key=lambda x: (
+                x.get("distance_mi")
+                if x.get("distance_mi") is not None
+                else 999
+            )
+        )
 
         result = {
             "aircraft": processed_aircraft,
@@ -280,42 +463,74 @@ class ADSBDataUpdateCoordinator(DataUpdateCoordinator):
         # Check for notifications against the fresh data
         if getattr(self, "notification_manager", None):
             try:
-                await self.notification_manager.check_and_notify(processed_aircraft)
+                await self.notification_manager.check_and_notify(
+                    processed_aircraft
+                )
             except Exception as err:
-                _LOGGER.error("Error checking notifications: %s", err)
+                _LOGGER.error(
+                    "Error checking notifications: %s",
+                    err,
+                )
 
         return result
 
-    def _process_aircraft(self, plane: dict[str, Any]) -> dict[str, Any]:
+    def _process_aircraft(
+        self,
+        plane: dict[str, Any],
+    ) -> dict[str, Any]:
         """Process and enrich individual aircraft data."""
         # Get enhanced aircraft type information
         aircraft_type = plane.get("t")
         type_info = self.get_aircraft_type_info(aircraft_type)
 
-        # readsb reports alt_baro as the string "ground" for taxiing aircraft —
-        # normalize so every consumer can rely on altitude_ft being numeric
-        # (0 = on ground or unknown; the on_ground flag disambiguates).
+        # readsb reports alt_baro as the string "ground" for taxiing
+        # aircraft — normalize so every consumer can rely on
+        # altitude_ft being numeric (0 = on ground or unknown;
+        # the on_ground flag disambiguates).
         alt_baro = plane.get("alt_baro")
         on_ground = alt_baro == "ground"
-        altitude_ft = alt_baro if isinstance(alt_baro, (int, float)) else 0
+        altitude_ft = (
+            alt_baro
+            if isinstance(alt_baro, (int, float))
+            else 0
+        )
+
         gs = plane.get("gs")
-        speed_kts = round(gs, 0) if isinstance(gs, (int, float)) else 0
+        speed_kts = (
+            round(gs, 0)
+            if isinstance(gs, (int, float))
+            else 0
+        )
+
         baro_rate = plane.get("baro_rate")
-        vertical_rate_fpm = baro_rate if isinstance(baro_rate, (int, float)) else 0
-        
+        vertical_rate_fpm = (
+            baro_rate
+            if isinstance(baro_rate, (int, float))
+            else 0
+        )
+
         # Use enhanced description if available, fallback to original
-        enhanced_description = type_info.get("description", "Unknown aircraft")
-        if enhanced_description == "Unknown aircraft" or enhanced_description == aircraft_type:
-            # Fallback to original description if no enhancement
-            enhanced_description = plane.get("desc", "Unknown aircraft")
-        
+        enhanced_description = type_info.get(
+            "description",
+            "Unknown aircraft",
+        )
+
+        if (
+            enhanced_description == "Unknown aircraft"
+            or enhanced_description == aircraft_type
+        ):
+            enhanced_description = plane.get(
+                "desc",
+                "Unknown aircraft",
+            )
+
         return {
             # Basic identifiers
             "hex": plane.get("hex"),
             "tail": plane.get("r", "Unknown"),
             "flight": (plane.get("flight") or "").strip() or None,
-            
-            # Aircraft details (enhanced with tar1090-db)
+
+            # Aircraft details
             "aircraft_type": aircraft_type,
             "description": enhanced_description,
             "category": type_info.get("category", "Unknown"),
@@ -324,13 +539,17 @@ class ADSBDataUpdateCoordinator(DataUpdateCoordinator):
             "engine_type": type_info.get("engine_type", "Unknown"),
             "operator": plane.get("ownOp"),
             "year": plane.get("year"),
-            
+
             # Position and movement
             "latitude": plane.get("lat"),
             "longitude": plane.get("lon"),
-            "distance_mi": round(plane.get("r_dst"), 1) if plane.get("r_dst") is not None else None,
+            "distance_mi": (
+                round(plane.get("r_dst"), 1)
+                if plane.get("r_dst") is not None
+                else None
+            ),
             "direction": plane.get("r_dir"),
-            
+
             # Flight data
             "altitude_ft": altitude_ft,
             "on_ground": on_ground,
@@ -338,7 +557,7 @@ class ADSBDataUpdateCoordinator(DataUpdateCoordinator):
             "speed_kts": speed_kts,
             "heading": plane.get("track"),
             "vertical_rate_fpm": vertical_rate_fpm,
-            
+
             # Navigation
             "squawk": plane.get("squawk"),
             "emergency": plane.get("emergency", "none"),
@@ -349,16 +568,16 @@ class ADSBDataUpdateCoordinator(DataUpdateCoordinator):
             "adsb_version": plane.get("version"),
 
             # Technical
-            "icao_category": plane.get("category"),  # Original ICAO category
+            "icao_category": plane.get("category"),
             "messages": plane.get("messages", 0),
             "seen": plane.get("seen", 0),
             "rssi": plane.get("rssi"),
-            
+
             # Raw tar1090-db info for debugging
             "raw_type_desc": type_info.get("raw_desc", ""),
             "raw_weight_class": type_info.get("raw_wtc", "L"),
         }
-    
+
     async def _async_load_military_database(self) -> None:
         """Download and parse the military aircraft database.
 
@@ -366,36 +585,53 @@ class ADSBDataUpdateCoordinator(DataUpdateCoordinator):
         startup, by the daily refresh timer, and by the manual reload service.
         """
         if self._db_loading:
-            _LOGGER.debug("Military database load already in progress, skipping")
+            _LOGGER.debug(
+                "Military database load already in progress, skipping"
+            )
             return
+
         self._db_loading = True
+
         try:
             session = async_get_clientsession(self.hass)
+
             async with asyncio.timeout(60):
                 async with session.get(MILITARY_DB_URL) as response:
                     if response.status != 200:
                         _LOGGER.warning(
-                            "Failed to load military database: HTTP %d", response.status
+                            "Failed to load military database: HTTP %d",
+                            response.status,
                         )
                         return
+
                     content = await response.text()
 
             # ~700k entries — parse and filter off the event loop
             military_db = await self.hass.async_add_executor_job(
-                _parse_military_db, content
+                _parse_military_db,
+                content,
             )
+
             self._military_database = military_db
             self._db_last_updated = datetime.now()
+
             _LOGGER.info(
-                "Loaded %d military aircraft from tar1090-db", len(military_db)
+                "Loaded %d military aircraft from tar1090-db",
+                len(military_db),
             )
+
         except Exception as err:
-            _LOGGER.error("Error loading military database: %s", err)
+            _LOGGER.error(
+                "Error loading military database: %s",
+                err,
+            )
+
         finally:
             self._db_loading = False
 
     def detect_military_aircraft(
-        self, aircraft_list: list[dict[str, Any]]
+        self,
+        aircraft_list: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """Return the subset of aircraft found in the military database.
 
@@ -404,36 +640,66 @@ class ADSBDataUpdateCoordinator(DataUpdateCoordinator):
         """
         if not self._military_database:
             return []
+
         military = []
+
         for aircraft in aircraft_list:
             hex_code = (aircraft.get("hex") or "").upper()
             db_info = self._military_database.get(hex_code)
+
             if db_info:
                 aircraft["_db_info"] = db_info
                 aircraft["_detection_reasons"] = ["DATABASE_MATCH"]
                 military.append(aircraft)
+
         return military
 
     def get_military_database_status(self) -> dict[str, Any]:
         """Get military database status for monitoring."""
         return {
             "database_loaded": self._military_database is not None,
-            "database_size": len(self._military_database) if self._military_database else 0,
-            "last_updated": self._db_last_updated.isoformat() if self._db_last_updated else None,
-            "last_updated_friendly": self._db_last_updated.strftime("%Y-%m-%d %H:%M:%S") if self._db_last_updated else "Never",
+            "database_size": (
+                len(self._military_database)
+                if self._military_database
+                else 0
+            ),
+            "last_updated": (
+                self._db_last_updated.isoformat()
+                if self._db_last_updated
+                else None
+            ),
+            "last_updated_friendly": (
+                self._db_last_updated.strftime("%Y-%m-%d %H:%M:%S")
+                if self._db_last_updated
+                else "Never"
+            ),
         }
 
 
-def _parse_military_db(content: str) -> dict[str, dict[str, str]]:
+def _read_aircraft_file(file_path: str) -> dict[str, Any]:
+    """Read ADSB aircraft JSON from a local file."""
+    with open(file_path, "r", encoding="utf-8") as file:
+        return json.load(file)
+
+
+def _parse_military_db(
+    content: str,
+) -> dict[str, dict[str, str]]:
     """Parse the Mictronics aircraft DB, keeping only military (flag "10")."""
     db_data = json.loads(content)
     military_db = {}
+
     for icao_hex, aircraft_info in db_data.items():
         if len(aircraft_info) >= 3 and aircraft_info[2] == "10":
             military_db[icao_hex.upper()] = {
                 "tail": aircraft_info[0],
                 "type": aircraft_info[1],
                 "flag": aircraft_info[2],
-                "description": aircraft_info[3] if len(aircraft_info) > 3 else "",
+                "description": (
+                    aircraft_info[3]
+                    if len(aircraft_info) > 3
+                    else ""
+                ),
             }
+
     return military_db
