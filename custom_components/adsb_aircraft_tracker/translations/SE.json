@@ -1,0 +1,91 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Konfiguration av ADSB Aircraft Tracker",
+        "description": "Välj hur Home Assistant ska ta emot ADS-B-flygdata. Du kan läsa direkt från en lokal aircraft.json-fil eller ansluta till en ADS-B-mottagare via HTTP.",
+        "data": {
+          "data_source": "📡 ADS-B-datakälla",
+          "adsb_file_path": "📁 Lokal aircraft.json-fil",
+          "adsb_host": "🌐 IP-adress till ADSB-mottagare",
+          "adsb_port": "🔌 Portnummer",
+          "update_interval": "⏱️ Uppdateringsintervall (sekunder)",
+          "distance_limit": "📍 Räckviddsfilter för flygplan (miles/km)"
+        },
+        "data_description": {
+          "data_source": "Välj Lokal fil när aircraft.json finns tillgänglig i Home Assistant, till exempel /config/data/aircraft.json. Välj HTTP för att ansluta direkt till en dump1090-/tar1090-kompatibel ADS-B-mottagare.",
+          "adsb_file_path": "Fullständig sökväg till aircraft.json-filen i Home Assistant. Exempel: /config/data/aircraft.json.",
+          "adsb_host": "IP-adress eller värdnamn till din ADS-B-mottagare. Behövs endast när HTTP används.",
+          "adsb_port": "Porten där din mottagare tillhandahåller flygdata. Standard är 8085 för tar1090. Behövs endast när HTTP används.",
+          "update_interval": "Hur ofta flygdata ska uppdateras. Rekommenderat: 10 sekunder (intervall: 5–300).",
+          "distance_limit": "Maximalt avstånd för att spåra flygplan. Enheten (miles/kilometer) beror på Home Assistants enhetsinställningar. Ange 0 för obegränsad räckvidd."
+        }
+      },
+      "summary": {
+        "title": "Konfiguration klar!",
+        "description": "{summary_text}\n\nDin ADS-B-datakälla har verifierats. Du kan nu välja att konfigurera aviseringar eller slutföra grundkonfigurationen.",
+        "data": {
+          "setup_choice": "Välj nästa steg"
+        }
+      },
+      "notifications": {
+        "title": "Konfigurera viktiga aviseringar",
+        "description": "Konfigurera de viktigaste aviseringarna för din ADSB-spårning. Ytterligare inställningar kan konfigureras senare under integrationens inställningar.",
+        "data": {
+          "notification_device": "📱 Mobil enhet för aviseringar",
+          "external_url": "🗺️ Extern ADSB-webbplats",
+          "military_notifications": "🪖 Aviseringar om militärflyg",
+          "emergency_notifications": "🚨 Aviseringar om nödsignaler",
+          "close_aircraft_enabled": "✈️ Aviseringar om nära flygplan"
+        },
+        "data_description": {
+          "notification_device": "Välj din mobila enhet för att ta emot flygaviseringar. Lämna tomt för att inaktivera aviseringar. Endast enheter med Home Assistant-appen visas.",
+          "external_url": "Valfri webbadress som öppnas när du trycker på en flygavisering. Vid lokal filkälla finns inget ADS-B-webbgränssnitt om du inte anger en extern webbadress.",
+          "military_notifications": "Få aviseringar när militära flygplan upptäcks i närheten.",
+          "emergency_notifications": "Få omedelbara aviseringar vid flygets nödkoder: 7700 (allmänt nödläge), 7600 (radiobortfall) och 7500 (kapning).",
+          "close_aircraft_enabled": "Få aviseringar när flygplan passerar mycket nära eller på låg höjd."
+        }
+      }
+    },
+    "error": {
+      "connection_refused": "Anslutningen nekades av din ADS-B-mottagare. Kontrollera att mottagaren körs och att portnumret är korrekt.",
+      "timeout": "Anslutningen tog för lång tid. ADS-B-mottagaren kan vara otillgänglig från Home Assistant. Kontrollera IP-adressen och porten.",
+      "cannot_resolve": "Kunde inte hitta värdnamnet. Kontrollera att adressen är korrekt skriven.",
+      "cannot_connect": "Kunde inte ansluta till ADS-B-datakällan. Kontrollera den konfigurerade datakällan och nätverksanslutningen.",
+      "invalid_host": "Anslutning till värden lyckades, men ett oväntat svar togs emot. Det kanske inte är en ADS-B-mottagare, eller så används porten av en annan tjänst.",
+      "invalid_adsb_data": "Datakällan nåddes, men innehåller inte giltiga ADS-B-data. Kontrollera att aircraft.json-filen eller HTTP-endpointen innehåller giltiga ADS-B-data.",
+      "unknown": "Ett oväntat fel inträffade."
+    },
+    "abort": {
+      "already_configured": "Den här ADS-B-datakällan är redan konfigurerad."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Inställningar för ADSB Aircraft Tracker",
+        "description": "Konfigurera din ADS-B-datakälla och inställningar för flygspårning.",
+        "data": {
+          "data_source": "📡 ADS-B-datakälla",
+          "adsb_file_path": "📁 Lokal aircraft.json-fil",
+          "adsb_host": "🌐 IP-adress till ADSB-mottagare",
+          "adsb_port": "🔌 Portnummer",
+          "update_interval": "⏱️ Uppdateringsintervall (sekunder)",
+          "distance_limit": "📍 Räckviddsgräns för flygplan",
+          "notification_device": "📱 Mobil enhet för aviseringar",
+          "external_url": "🗺️ Extern ADSB-webbplats"
+        },
+        "data_description": {
+          "data_source": "Välj Lokal fil för att läsa flygdata från en fil i Home Assistant, eller HTTP för att ansluta till en ADS-B-mottagare.",
+          "adsb_file_path": "Fullständig sökväg till den lokala aircraft.json-filen. Exempel: /config/data/aircraft.json.",
+          "adsb_host": "IP-adress eller värdnamn till din ADS-B-mottagare. Behövs endast när HTTP används.",
+          "adsb_port": "Porten där din mottagare tillhandahåller flygdata. Standard är 8085 för tar1090. Behövs endast när HTTP används.",
+          "update_interval": "Hur ofta flygdata ska uppdateras, i sekunder. Rekommenderat: 10 sekunder. Intervall: 5–300 sekunder.",
+          "distance_limit": "Maximalt avstånd för flygspårning. Enheten beror på Home Assistants enhetsinställning. Ange 0 för obegränsad räckvidd.",
+          "notification_device": "Välj din mobila enhet för att ta emot flygaviseringar. Lämna tomt för att inaktivera aviseringar.",
+          "external_url": "Valfri webbadress som öppnas när du trycker på en flygavisering. Lämna tomt om du endast använder den lokala aircraft.json-källan."
+        }
+      }
+    }
+  }
+}
